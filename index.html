@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Square Survival by TORR</title>
+
+<style>
+body {
+  margin: 0;
+  background: radial-gradient(circle, #0f172a, #020617);
+  overflow: hidden;
+  color: white;
+  font-family: sans-serif;
+}
+
+canvas {
+  display: block;
+}
+
+#ui {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0,0,0,0.7);
+}
+
+button {
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: none;
+  background: #3b82f6;
+  color: white;
+  font-size: 18px;
+}
+
+/* joystick */
+#joystick {
+  position: fixed;
+  bottom: 40px;
+  left: 40px;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+}
+
+#stick {
+  width: 40px;
+  height: 40px;
+  background: #3b82f6;
+  border-radius: 50%;
+  position: absolute;
+  left: 30px;
+  top: 30px;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="ui">
+  Score: <span id="score">0</span> |
+  High: <span id="high">0</span>
+</div>
+
+<div id="overlay">
+  <h1>Square Survival by TORR</h1>
+  <button onclick="startGame()">Start Game</button>
+</div>
+
+<div id="joystick"><div id="stick"></div></div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+resize();
+window.onresize = resize;
+
+// SOUND
+const beep = new Audio("https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg");
+const powerSound = new Audio("https://actions.google.com/sounds/v1/cartoon/pop.ogg");
+
+// GAME STATE
+let player, enemies, particles, powerups;
+let score=0, high=localStorage.getItem("hs")||0;
+let running=false, last=0, difficulty=1;
+let shield=0, slow=0;
+
+document.getElementById("high").textContent = high;
+
+// INPUT
+let keys = {};
+onkeydown = e => keys[e.key]=true;
+onkeyup = e => keys[e.key]=false;
+
+// TOUCH JOYSTICK
+let joy = {x:0,y:0};
+let dragging=false;
+const stick = document.getElementById("stick");
+
+document.getElementById("joystick").addEventListener("touchstart", e=>{
+  dragging=true;
+});
+document.addEventListener("touchmove", e=>{
+  if(!dragging) return;
+  let touch = e.touches[0];
+  let rect = joystick.getBoundingClientRect();
+  let dx = touch.clientX - (rect.left+50);
+  let dy = touch.clientY - (rect.top+50);
+
+  let dist = Math.hypot(dx,dy);
+  if(dist>40){
+    dx*=40/dist;
+    dy*=40/dist;
+  }
+
+  stick.style.left = 30+dx+"px";
+  stick.style.top = 30+dy+"px";
+
+  joy.x = dx/40;
+  joy.y = dy/40;
+});
+document.addEventListener("touchend", ()=>{
+  dragging=false;
+  joy.x=joy.y=0;
+  stick.style.left="30px";
+  stick.style.top="30px";
+});
+
+// INIT
+function startGame(){
+  player={x:canvas.width/2,y:canvas.height/2,size:20,speed:5};
+  enemies=[];
+  particles=[];
+  powerups=[];
+  score=0;
+  difficulty=1;
+  shield=0;
+  slow=0;
+  running=true;
+  document.getElementById("overlay").style.display="none";
+  last=performance.now();
+  requestAnimationFrame(loop);
+}
+
+// SPAWN
+function spawnEnemy(){
+  let x = Math.random()<0.5 ? (Math.random()<0.5?0:canvas.width) : Math.random()*canvas.width;
+  let y = (x===0||x===canvas.width) ? Math.random()*canvas.height : (Math.random()<0.5?0:canvas.height);
+
+  enemies.push({x,y,size:20,speed:2+difficulty});
+}
+
+function spawnPower(){
+  let type = Math.random()<0.5?"shield":"slow";
+  powerups.push({
+    x:Math.random()*canvas.width,
+    y:Math.random()*canvas.height,
+    size:15,
+    type
+  });
+}
+
+// UPDATE
+function update(dt){
+
+  // movement
+  let vx = (keys["ArrowRight"]?1:0)-(keys["ArrowLeft"]?1:0)+joy.x;
+  let vy = (keys["ArrowDown"]?1:0)-(keys["ArrowUp"]?1:0)+joy.y;
+
+  player.x += vx*player.speed;
+  player.y += vy*player.speed;
+
+  // spawn
+  if(Math.random()<dt/800) spawnEnemy();
+  if(Math.random()<dt/5000) spawnPower();
+
+  // enemies
+  enemies.forEach(e=>{
+    let dx = player.x-e.x;
+    let dy = player.y-e.y;
+    let dist = Math.hypot(dx,dy);
+
+    let sp = e.speed*(slow?0.4:1);
+    e.x += dx/dist*sp;
+    e.y += dy/dist*sp;
+
+    if(
+      player.x<e.x+e.size &&
+      player.x+player.size>e.x &&
+      player.y<e.y+e.size &&
+      player.y+player.size>e.y
+    ){
+      if(shield>0){
+        shield=0;
+        e.dead=true;
+        powerSound.play();
+      } else {
+        beep.play();
+        gameOver();
+      }
+    }
+  });
+
+  enemies = enemies.filter(e=>!e.dead);
+
+  // powerup
+  powerups.forEach(p=>{
+    if(
+      player.x<p.x+p.size &&
+      player.x+player.size>p.x &&
+      player.y<p.y+p.size &&
+      player.y+player.size>p.y
+    ){
+      if(p.type==="shield") shield=3000;
+      if(p.type==="slow") slow=3000;
+      powerSound.play();
+      p.dead=true;
+    }
+  });
+
+  powerups = powerups.filter(p=>!p.dead);
+
+  // timers
+  if(shield>0) shield-=dt;
+  if(slow>0) slow-=dt;
+
+  // difficulty naik
+  difficulty += dt*0.00002;
+
+  score += dt/1000;
+  document.getElementById("score").textContent = Math.floor(score);
+}
+
+// DRAW
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // player
+  ctx.fillStyle = shield>0 ? "#22c55e" : "#3b82f6";
+  ctx.fillRect(player.x,player.y,player.size,player.size);
+
+  // enemies
+  ctx.fillStyle="#ef4444";
+  enemies.forEach(e=>ctx.fillRect(e.x,e.y,e.size,e.size));
+
+  // powerups
+  powerups.forEach(p=>{
+    ctx.fillStyle = p.type==="shield"?"#22c55e":"#eab308";
+    ctx.fillRect(p.x,p.y,p.size,p.size);
+  });
+}
+
+// LOOP
+function loop(t){
+  if(!running) return;
+  let dt = t-last;
+  last=t;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(loop);
+}
+
+// GAME OVER
+function gameOver(){
+  running=false;
+
+  if(score>high){
+    high=Math.floor(score);
+    localStorage.setItem("hs",high);
+    document.getElementById("high").textContent=high;
+  }
+
+  document.getElementById("overlay").style.display="flex";
+}
+</script>
+
+</body>
+</html>
